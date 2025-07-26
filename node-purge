@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# Author: Jeremy Addy
+# Date: 07.26.2025
+
+# Gather PIDs of processes listening on ports 3000-3305 and 3307-5999 explicitly excluding 3306
+port_pids=$(sudo netstat -tulpn 2>/dev/null | awk '/:(3[0-9]{3}|[4-5][0-9]{3}|5999) / {
+    split($7,a,"/");
+    if(a[2] != "mysqld") print a[1]
+}' | sort -u)
+
+# Gather PIDs of server.js processes excluding anything containing 'vscode' or '.nvm'
+serverjs_pids=$(ps aux | awk '/server.js/ && !/awk/ && !/vscode/ && !/.nvm/ {print $2}' | sort -u)
+
+# Combine all PIDs into one list
+all_pids=$(echo -e "${port_pids}\n${serverjs_pids}" | grep -E '^[0-9]+$' | sort -u)
+
+# Filter out any PID belonging to a process with "vscode" in command line
+filtered_pids=""
+for pid in $all_pids; do
+  # Check if the PID exists
+  if ! ps -p "$pid" > /dev/null 2>&1; then
+    # Skip non-existent PIDs
+    continue
+  fi
+  # Check if command contains vscode
+  if ps -p "$pid" -o cmd= 2>/dev/null | grep -iq "vscode"; then
+    continue
+  fi
+  filtered_pids+="$pid"$'\n'
+done
+
+# Remove trailing newline 
+filtered_pids=$(echo "$filtered_pids" | sed '/^\s*$/d')
+
+if [ -z "$filtered_pids" ]; then
+  echo "No matching processes found to kill."
+  exit 0
+fi
+
+echo
+echo -e "\e[33mThe following minions will be nuked from orbit:\e[0m"
+echo
+
+echo -e "PID\tUSER\t\tPORTS\t\tCOMMAND"
+echo "---------------------------------------------------------------"
+echo "$filtered_pids" | while read -r pid; do
+  if ps -p "$pid" > /dev/null 2>&1; then
+    user=$(ps -p "$pid" -o user= | tr -d ' ')
+    cmd=$(ps -p "$pid" -o cmd=)
+    # Find all listening ports for this PID using netstat
+    ports=$(sudo netstat -tulpn 2>/dev/null | awk -v pid="$pid" '$7 ~ pid"/" {
+      split($4,a,":"); print a[length(a)] 
+    }' | sort -u | paste -sd "," -)
+    # If no ports found, show "-"
+    [ -z "$ports" ] && ports="-"
+    echo -e "$pid\t$user\t$ports\t\t$cmd"
+  else
+    echo -e "$pid\t(process exited)"
+  fi
+done
+
+read -r -p "Do you want to continue? (y/n): " answer
+case "$answer" in
+  [Yy]* )
+    echo "Proceeding with killing processes..."
+    ;;
+  * )
+    echo "Aborted by user."
+    exit 1
+    ;;
+esac
+
+# Kill the listed PID safely
+echo "$filtered_pids" | while read -r pid; do
+  # Try to kill PID as non-root and escalate if needed
+  if ps -p "$pid" > /dev/null 2>&1; then
+    owner=$(ps -p "$pid" -o user= | tr -d ' ')
+    echo "killing $pid (owner: $owner)"
+    if [ "$owner" = "$(whoami)" ]; then
+      kill -9 "$pid"
+    else
+      sudo kill "$pid"
+    fi
+  fi
+done
+
+echo "Done."
