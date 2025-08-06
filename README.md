@@ -4,6 +4,9 @@ Just a collection of shell scripts that I'm finally putting in one place. At som
 
 ### Scripts
 
+#### dockerps 
+A tool to select which columns you wish to see out of `docker ps -a` for better readability. 
+
 #### node-purge
 Starting of as a one-liner it morphed into this, it is intended to cleanup my dev environment on my local machine.  
 Useful to nuke Node.js projects without killing MySQL or vscode server. 

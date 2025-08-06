@@ -1,0 +1,194 @@
+#!/bin/bash
+
+# pretty_docker_ps.sh
+# Prints docker ps -a with selectable columns and flags
+
+# Default columns if nothing specified
+DEFAULT_COLUMNS=("ID" "Image" "CreatedAt" "Status" "Ports" "Names")
+
+# Mapping column to docker field and header
+declare -A field_map=(
+  ["ID"]="ID"
+  ["IMAGE"]="Image"
+  ["CREATEDAT"]="CreatedAt"
+  ["CREATED"]="CreatedAt"
+  ["STATUS"]="Status"
+  ["PORTS"]="Ports"
+  ["NAMES"]="Names"
+  ["COMMAND"]="Command"
+)
+
+declare -A header_map=(
+  ["ID"]="CONTAINER ID"
+  ["IMAGE"]="IMAGE"
+  ["CREATEDAT"]="CREATED"
+  ["STATUS"]="STATUS"
+  ["PORTS"]="PORTS"
+  ["NAMES"]="NAMES"
+  ["COMMAND"]="COMMAND"
+)
+
+# Mapping short flags to column names (uppercase keys)
+declare -A flag_map=(
+  ["i"]="ID"
+  ["m"]="IMAGE"
+  ["c"]="CREATEDAT"
+  ["s"]="STATUS"
+  ["p"]="PORTS"
+  ["n"]="NAMES"
+  ["o"]="COMMAND"
+)
+
+show_help() {
+  cat << EOF
+Usage: $0 [options]
+
+Options:
+  -i       Show CONTAINER ID
+  -m       Show IMAGE
+  -c       Show CREATED (CreatedAt)
+  -s       Show STATUS
+  -p       Show PORTS
+  -n       Show NAMES
+  -o       Show COMMAND (the command run in the container)
+  -h, --help  Show this help message and exit
+
+Flags can be combined, e.g. -isno means show ID, STATUS, NAMES, and COMMAND.
+
+Long option:
+  -C, --columns LIST    Comma-separated list of columns to display.
+                       Available columns (case-insensitive):
+                         ID, Image, CreatedAt (or Created), Status, Ports, Names, Command
+                       Default (if no options): ID,Image,CreatedAt,Status,Ports,Names
+
+Examples:
+  $0
+  $0 -isn
+  $0 -cpm
+  $0 -osn
+  $0 --columns ID,Image,Names,Command
+EOF
+}
+
+columns=()
+
+# Parse short flags and long options
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      show_help
+      exit 0
+      ;;
+    -C|--columns)
+      if [[ -n $2 && $2 != -* ]]; then
+        IFS=',' read -r -a columns <<< "$2"
+        shift 2
+      else
+        echo "Error: $1 requires a comma-separated argument."
+        exit 1
+      fi
+      ;;
+    -?*)
+      # Extract all short flags, e.g. -isno
+      flags="${1#-}"
+      for ((i=0; i<${#flags}; i++)); do
+        f="${flags:i:1}"
+        col="${flag_map[$f]}"
+        if [[ -z $col ]]; then
+          echo "Error: Unknown flag -$f"
+          show_help
+          exit 1
+        fi
+        columns+=("$col")
+      done
+      shift
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      show_help
+      exit 1
+      ;;
+  esac
+done
+
+# If no columns specified, use default
+if [[ ${#columns[@]} -eq 0 ]]; then
+  columns=("${DEFAULT_COLUMNS[@]}")
+fi
+
+# Normalize columns: uppercase and remove duplicates while preserving order
+declare -A seen
+normalized_columns=()
+for col in "${columns[@]}"; do
+  col_upper=$(echo "$col" | tr '[:lower:]' '[:upper:]')
+  # Accept CREATED as an alias for CREATEDAT too
+  if [[ $col_upper == "CREATED" ]]; then
+    col_upper="CREATEDAT"
+  fi
+  if [[ -z "${field_map[$col_upper]}" ]]; then
+    echo "Error: Invalid column name '$col'. Use -h for help."
+    exit 1
+  fi
+  if [[ -z ${seen[$col_upper]} ]]; then
+    normalized_columns+=("$col_upper")
+    seen[$col_upper]=1
+  fi
+done
+
+# Check docker installed
+if ! command -v docker &> /dev/null; then
+  echo "Error: docker is not installed or not in PATH."
+  exit 1
+fi
+
+# Build Go template fields and headers
+go_template_fields=()
+headers=()
+
+for col in "${normalized_columns[@]}"; do
+  go_template_fields+=("{{.${field_map[$col]}}}")
+  headers+=("${header_map[$col]}")
+done
+
+format_str=$(IFS="|"; echo "${go_template_fields[*]}")
+
+mapfile -t containers < <(docker ps -a --format "$format_str")
+
+# Calculate max widths
+declare -a max_width
+for i in "${!headers[@]}"; do
+  max_width[$i]=${#headers[$i]}
+done
+
+for line in "${containers[@]}"; do
+  IFS='|' read -r -a fields <<< "$line"
+  for i in "${!fields[@]}"; do
+    len=${#fields[$i]}
+    (( len > max_width[$i] )) && max_width[$i]=$len
+  done
+done
+
+print_separator() {
+  for w in "${max_width[@]}"; do
+    printf "+-%s" "$(printf '%*s' "$w" '' | tr ' ' '-')"
+  done
+  echo "+"
+}
+
+print_row() {
+  local -n row=$1
+  printf "|"
+  for i in "${!row[@]}"; do
+    printf " %-*s |" "${max_width[$i]}" "${row[$i]}"
+  done
+  echo
+}
+
+print_separator
+print_row headers
+print_separator
+for line in "${containers[@]}"; do
+  IFS='|' read -r -a fields <<< "$line"
+  print_row fields
+done
+print_separator

@@ -59,7 +59,7 @@ echo "$filtered_pids" | while read -r pid; do
     echo -e "$pid\t(process exited)"
   fi
 done
-
+echo 
 read -r -p "Do you want to continue? (y/n): " answer
 case "$answer" in
   [Yy]* )
