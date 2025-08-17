@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Exit on error and unset variable
+set -eu
+
+# Check if running as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "This script must be run with sudo privileges" >&2
+    exit 1
+fi
+
+# Update package lists and install necessary dependencies
+apt update && apt install -y wget gpg apt-transport-https
+
+# Download Microsoft GPG key and save it
+wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
+
+# Install the GPG key to the trusted keyrings directory
+install -D -o root -g root -m 644 packages.microsoft.gpg /etc/apt/keyrings/packages.microsoft.gpg
+
+# Add the VSCode repository to the apt sources list
+echo "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" | tee /etc/apt/sources.list.d/vscode.list > /dev/null
+
+# Update package lists again with the new repository and install VSCode
+apt update && apt -y install code
+
+# Clean up the downloaded GPG key file
+rm -f packages.microsoft.gpg
+
+# Setup 'code tunnel' to run at boot using systemd service
+SERVICE_FILE="/etc/systemd/system/code-tunnel.service"
+
+# Create systemd service file
+cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=VSCode Tunnel Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/code tunnel
+Restart=always
+RestartSec=3
+User=$SUDO_USER
+Environment="PATH=/usr/bin"
+WorkingDirectory=/home/$SUDO_USER
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Set proper permissions for service file
+chmod 644 "$SERVICE_FILE"
+
+# Reload systemd to recognize the new service
+systemctl daemon-reload
+
+# Enable the service to start at boot
+systemctl enable code-tunnel.service
+
+echo "Installation complete. VS Code Tunnel will start automatically on boot."
+echo "Note: You need to authenticate once by running:"
+echo "  code tunnel login"
+echo "After authentication, start the service with:"
+echo "  sudo systemctl start code-tunnel.service"
