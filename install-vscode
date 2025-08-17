@@ -12,6 +12,9 @@ fi
 # Update package lists and install necessary dependencies
 apt update && apt install -y wget gpg apt-transport-https
 
+# Remove existing conflicting vscode source list if exists
+sudo rm -f /etc/apt/sources.list.d/vscode.list
+
 # Download Microsoft GPG key and save it
 wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
 
