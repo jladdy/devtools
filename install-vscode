@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Exit on error and unset variable
+# Exit on error and unset variables
 set -eu
 
 # Check if running as root
@@ -9,31 +9,46 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Update package lists and install necessary dependencies
+# Get the actual user (not root)
+REAL_USER=$(logname)
+echo "Installing for user: $REAL_USER"
+
+# Fix conflicting apt sources
+cleanup_conflicting_sources() {
+    echo "Cleaning up conflicting repository sources..."
+    # Remove all existing Microsoft repo configurations
+    rm -f /etc/apt/sources.list.d/vscode.list
+    rm -f /etc/apt/sources.list.d/microsoft*.list
+    # Remove conflicting keyrings
+    rm -f /etc/apt/trusted.gpg.d/microsoft*.gpg
+    rm -f /usr/share/keyrings/microsoft*.gpg
+    rm -f /etc/apt/keyrings/packages.microsoft.gpg
+}
+
+# Install dependencies
+echo "Updating packages and installing dependencies..."
 apt update && apt install -y wget gpg apt-transport-https
 
-# Remove existing conflicting vscode source list if exists
-sudo rm -f /etc/apt/sources.list.d/vscode.list
+# Clean up any conflicting sources
+cleanup_conflicting_sources
 
-# Download Microsoft GPG key and save it
+# Download and install Microsoft GPG key
+echo "Adding Microsoft repository..."
 wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
-
-# Install the GPG key to the trusted keyrings directory
-install -D -o root -g root -m 644 packages.microsoft.gpg /etc/apt/keyrings/packages.microsoft.gpg
-
-# Add the VSCode repository to the apt sources list
-echo "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" | tee /etc/apt/sources.list.d/vscode.list > /dev/null
-
-# Update package lists again with the new repository and install VSCode
-apt update && apt -y install code
-
-# Clean up the downloaded GPG key file
+install -D -o root -g root -m 644 packages.microsoft.gpg /usr/share/keyrings/microsoft.gpg
 rm -f packages.microsoft.gpg
 
-# Setup 'code tunnel' to run at boot using systemd service
+# Add VSCode repository
+echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/code stable main" | tee /etc/apt/sources.list.d/vscode.list >/dev/null
+
+# Install VSCode
+echo "Installing VSCode..."
+apt update && apt install -y code
+
+# Fix PAM/sudo issues for tunnel service
+echo "Configuring code tunnel service..."
 SERVICE_FILE="/etc/systemd/system/code-tunnel.service"
 
-# Create systemd service file
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=VSCode Tunnel Service
@@ -44,22 +59,33 @@ Type=simple
 ExecStart=/usr/bin/code tunnel
 Restart=always
 RestartSec=3
-User=$SUDO_USER
-Environment="PATH=/usr/bin"
-WorkingDirectory=/home/$SUDO_USER
+User=$REAL_USER
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+WorkingDirectory=/home/$REAL_USER
+PAMName=login
+
+# Important security context for sudo to work
+UMask=0077
+NoNewPrivileges=no
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Set proper permissions for service file
+# Set proper permissions
 chmod 644 "$SERVICE_FILE"
 
-# Reload systemd to recognize the new service
+# Reload systemd
 systemctl daemon-reload
-
-# Enable the service to start at boot
 systemctl enable code-tunnel.service
+
+echo "Starting tunnel service..."
+systemctl start code-tunnel.service
+
+# Configure sudo access (fixes PAM issues)
+echo "Configuring sudo access for $REAL_USER..."
+echo "$REAL_USER ALL=(ALL) NOPASSWD:ALL" | tee /etc/sudoers.d/vscode-tunnel-user
 
 echo "Installation complete. VS Code Tunnel will start automatically on boot."
 echo "Note: You need to authenticate once by running:"
