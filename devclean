@@ -1,0 +1,59 @@
+#!/bin/bash
+
+# Author: Jeremy Addy
+# Date: 10.01.2025
+
+# Function to kill processes by port range and process name pattern
+kill_processes_by_port_range() {
+    local start_port=$1
+    local end_port=$2
+    local proc_patterns=("node" "next-server")
+
+    echo "Searching for processes matching patterns: ${proc_patterns[*]} on ports $start_port-$end_port..."
+
+    # Find relevant PIDs based on ports and patterns
+    declare -A kill_pids
+
+    for ((port=start_port; port<=end_port; port++)); do
+        # Get PIDs listening on this port
+        mapfile -t pids < <(ss -ltnp "( sport = :$port )" 2>/dev/null | grep -oP 'pid=\d+' | grep -oP '\d+')
+        for pid in "${pids[@]}"; do
+            # Get process name for the pid
+            if [[ -n "$pid" && -d /proc/$pid ]]; then
+                proc_name=$(ps -p "$pid" -o comm=)
+                for pattern in "${proc_patterns[@]}"; do
+                    if [[ "$proc_name" == "$pattern" ]]; then
+                        kill_pids[$pid]=$proc_name
+                    fi
+                done
+            fi
+        done
+    done
+
+    if [ ${#kill_pids[@]} -eq 0 ]; then
+        echo "No matching processes found in the port range."
+        return 0
+    fi
+
+    echo "Found the following processes to kill:"
+    for pid in "${!kill_pids[@]}"; do
+        echo "PID: $pid, Process: ${kill_pids[$pid]}"
+    done
+
+    # Prompt user for confirmation
+    read -rp "Proceed to kill these processes? (y/N): " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        for pid in "${!kill_pids[@]}"; do
+            if kill "$pid" 2>/dev/null; then
+                echo "Successfully killed PID $pid (${kill_pids[$pid]})"
+            else
+                echo "Failed to kill PID $pid (${kill_pids[$pid]}). You may need to run the script as root."
+            fi
+        done
+    else
+        echo "Aborted by user. No processes were killed."
+    fi
+}
+
+# Run the function for ports 3000-6000
+kill_processes_by_port_range 3000 6000
